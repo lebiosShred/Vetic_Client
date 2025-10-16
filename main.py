@@ -3,96 +3,105 @@ import requests
 from flask import Flask, request, jsonify
 from PIL import Image
 import io
-import json
-# Import the Box SDK components
-from boxsdk import JWTAuth, Client
 
-# Initialize the Flask web application
 app = Flask(__name__)
 
-# --- JWT Configuration ---
-# Read the JSON configuration from the environment variable
-JWT_CONFIG_JSON = os.environ.get('BOX_JWT_CONFIG')
+# Load the Developer Token secret
+BOX_ACCESS_TOKEN = os.environ.get('BOX_ACCESS_TOKEN')
 
-# Check if the secret is present
-if not JWT_CONFIG_JSON:
-    raise ValueError("CRITICAL ERROR: The BOX_JWT_CONFIG environment variable is not set.")
-
-# Parse the JSON string into a Python dictionary
-try:
-    config_dict = json.loads(JWT_CONFIG_JSON)
-except json.JSONDecodeError as e:
-    raise ValueError(f"CRITICAL ERROR: BOX_JWT_CONFIG is not valid JSON: {e}")
-
-# Use from_settings_dictionary instead of from_settings_file
-auth = JWTAuth.from_settings_dictionary(config_dict)
-client = Client(auth)
-
-# --- Other Secrets and Constants ---
+# Other secrets and constants
 OCR_API_KEY = os.environ.get('OCR_API_KEY')
-MAX_FILE_SIZE_BYTES = 1024 * 1024  # 1 MB
+BOX_API_BASE_URL = "https://api.box.com/2.0"
+MAX_FILE_SIZE_BYTES = 1024 * 1024
 
-# --- Skill 1: List Contents of a Folder ---
-@app.route('/list-folder', methods=['POST'])
-def list_folder_items():
+@app.route('/process-invoice', methods=['POST'])
+def process_invoice_from_box():
     data = request.get_json()
-    if not data or 'folder_id' not in data:
-        return jsonify({"error": "folder_id is required."}), 400
+    if not data or 'filename' not in data or 'parent_folder_id' not in data:
+        return jsonify({"error": "Both 'filename' and 'parent_folder_id' are required."}), 400
     
-    folder_id = data['folder_id']
-    try:
-        # Use the SDK to get items from the folder
-        items = client.folder(folder_id=folder_id).get_items()
-        # Format the response to be clean for the AI
-        item_list = [{"id": item.id, "name": item.name, "type": item.type} for item in items]
-        return jsonify({"entries": item_list})
-    except Exception as e:
-        return jsonify({"error": "Failed to list folder items.", "details": str(e)}), 500
+    filename = data['filename']
+    parent_folder_id = data['parent_folder_id']
 
-# --- Skill 2: Process a File by its ID ---
-@app.route('/process-file', methods=['POST'])
-def process_file_by_id():
-    data = request.get_json()
-    if not data or 'file_id' not in data:
-        return jsonify({"error": "file_id is required."}), 400
-    
-    file_id = data['file_id']
     try:
-        # 1. Download file content using the SDK
-        image_content = client.file(file_id).content()
+        # Use the Developer Token in the Authorization header for all Box API calls
+        headers = {"Authorization": f"Bearer {BOX_ACCESS_TOKEN}"}
+
+        # 1. List items in the parent folder
+        list_response = requests.get(f"{BOX_API_BASE_URL}/folders/{parent_folder_id}/items", headers=headers)
+        list_response.raise_for_status()
         
-        # 2. Resize image if it's too large for the OCR service's free tier
+        items = list_response.json()['entries']
+        file_id = None
+        for item in items:
+            if item['type'] == 'file' and item['name'] == filename:
+                file_id = item['id']
+                break
+        
+        if file_id is None:
+            return jsonify({"error": f"File '{filename}' not found in folder ID '{parent_folder_id}'."}), 404
+
+        # 2. Download the file content
+        download_response = requests.get(f"{BOX_API_BASE_URL}/files/{file_id}/content", headers=headers)
+        download_response.raise_for_status()
+        
+        image_content = download_response.content
+
+        # 3. Resize if needed
         if len(image_content) > MAX_FILE_SIZE_BYTES:
             img = Image.open(io.BytesIO(image_content))
+            # ... (resize logic is the same)
             scale_factor = (MAX_FILE_SIZE_BYTES / len(image_content)) ** 0.5
             new_width = int(img.width * scale_factor)
             new_height = int(img.height * scale_factor)
             img = img.resize((new_width, new_height), Image.LANCZOS)
-            
             buffer = io.BytesIO()
             img.save(buffer, format='PNG')
             image_content = buffer.getvalue()
-        
-        # 3. Send the content to the OCR service
+
+        # 4. Pass to OCR
         ocr_payload = {"apikey": OCR_API_KEY}
-        ocr_files = {"file": (f"{file_id}.png", image_content)}
+        ocr_files = {"file": (filename, image_content)}
         ocr_response = requests.post("https://api.ocr.space/parse/image", data=ocr_payload, files=ocr_files)
         ocr_response.raise_for_status()
+
         ocr_result = ocr_response.json()
-        
         if ocr_result.get('IsErroredOnProcessing'):
             return jsonify({"error": "OCR processing failed.", "details": ocr_result.get('ErrorMessage')}), 500
-        
+            
         extracted_text = ocr_result['ParsedResults'][0]['ParsedText']
-        
-        # 4. Return the final extracted text
-        return jsonify({"extracted_text": extracted_text})
-        
-    except Exception as e:
-        return jsonify({"error": "An internal server error occurred while processing the file.", "details": str(e)}), 500
 
-# This block allows for local testing but is ignored by Gunicorn on Render
+        # 5. Return final text
+        return jsonify({"extracted_text": extracted_text})
+
+    except Exception as e:
+        return jsonify({"error": "An internal server error occurred.", "details": str(e)}), 500
+
 if __name__ == '__main__':
-    # Render provides the PORT environment variable
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=8080)```
+
+#### Step 2: Revert Your `Dockerfile`
+
+Remove the complex build steps, as they are no longer needed. Use this simpler version.
+
+```dockerfile
+# Start from a standard, official Python 3.9 base image
+FROM python:3.9-slim
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install the Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
+COPY . .
+
+# Expose the port that Gunicorn will run on
+EXPOSE 10000
+
+# The command to run when the container starts
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "main:app"]
