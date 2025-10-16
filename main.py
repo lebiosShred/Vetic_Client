@@ -78,7 +78,8 @@ def process_invoice_from_box():
         return jsonify({"error": "An internal server error occurred.", "details": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)```
+    port = int(os.environ.get('PORT', 10000)) 
+    app.run(host='0.0.0.0', port=port)
 
 #### Step 2: Revert Your `Dockerfile`
 
@@ -105,3 +106,4 @@ EXPOSE 10000
 
 # The command to run when the container starts
 CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "main:app"]
+
