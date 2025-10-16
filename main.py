@@ -60,25 +60,7 @@ def process_invoice_from_box_diagnostic():
         # This will catch any other errors
         return jsonify({"error": "An internal server error occurred during the Box API interaction.", "details": str(e)}), 500
 
+# This block allows for local testing and will NOT be used by Gunicorn on Render.
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)```
-
-#### Step 2: Push, Redeploy, and Rerun the Test
-
-1.  **Push the Change:** Commit and push this new `main.py` file to your GitHub repository. (You do not need to change your `requirements.txt` or `Dockerfile` for this test).
-2.  **Redeploy:** Go to your Render dashboard and trigger a **"Manual Deploy" -> "Deploy latest commit"**. Wait for the service to go "Live".
-3.  **Run the Prompt:** Go back to Watsonx and run your prompt:
-    > **extract details for Hatvet_invoice-min.png**
-
-#### Step 3: Analyze the Result
-
-There are only two possible outcomes now:
-
-*   **Outcome A (Most Likely):** You see the **exact same `401 Unauthorized` error.** If this happens, it is **100% definitive proof** that the problem is with the `BOX_ACCESS_TOKEN` and its state on the Render service, because the code never attempted to contact OCR.space. The only solution in this case is the "hard reset" token refresh I outlined previously.
-
-*   **Outcome B (Less Likely):** The agent responds with a success message like:
-    > `{"status": "DIAGNOSTIC_SUCCESS", "message": "Successfully downloaded file from Box.", "file_size_bytes": 618152}`
-    If you see this, it means your suspicion was correct! The Box authentication is working, and the problem was indeed in the handoff to OCR.space (likely an invalid `OCR_API_KEY`).
-
-This test will give us our final, undeniable answer and tell us exactly which credential we need to focus on.
+    app.run(host='0.0.0.0', port=port)
