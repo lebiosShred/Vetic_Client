@@ -12,7 +12,7 @@ BOX_ACCESS_TOKEN = os.environ.get('BOX_ACCESS_TOKEN')
 # Other secrets and constants
 OCR_API_KEY = os.environ.get('OCR_API_KEY')
 BOX_API_BASE_URL = "https://api.box.com/2.0"
-MAX_FILE_SIZE_BYTES = 1024 * 1024
+MAX_FILE_SIZE_BYTES = 1024 * 1024  # 1 MB
 
 @app.route('/process-invoice', methods=['POST'])
 def process_invoice_from_box():
@@ -50,7 +50,6 @@ def process_invoice_from_box():
         # 3. Resize if needed
         if len(image_content) > MAX_FILE_SIZE_BYTES:
             img = Image.open(io.BytesIO(image_content))
-            # ... (resize logic is the same)
             scale_factor = (MAX_FILE_SIZE_BYTES / len(image_content)) ** 0.5
             new_width = int(img.width * scale_factor)
             new_height = int(img.height * scale_factor)
@@ -77,33 +76,7 @@ def process_invoice_from_box():
     except Exception as e:
         return jsonify({"error": "An internal server error occurred.", "details": str(e)}), 500
 
+# This block is for local testing and will NOT be used by Gunicorn on Render.
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000)) 
+    port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
-#### Step 2: Revert Your `Dockerfile`
-
-Remove the complex build steps, as they are no longer needed. Use this simpler version.
-
-```dockerfile
-# Start from a standard, official Python 3.9 base image
-FROM python:3.9-slim
-
-# Set the working directory inside the container
-WORKDIR /app
-
-# Copy requirements first for better caching
-COPY requirements.txt .
-
-# Install the Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of the application
-COPY . .
-
-# Expose the port that Gunicorn will run on
-EXPOSE 10000
-
-# The command to run when the container starts
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "main:app"]
-
