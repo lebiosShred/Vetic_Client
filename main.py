@@ -1,22 +1,18 @@
 import os
 import requests
 from flask import Flask, request, jsonify
-from PIL import Image
-import io
+
+# This is a temporary diagnostic version of the main.py file.
+# It completely removes the Pillow and OCR.space components to isolate the Box API connection.
 
 app = Flask(__name__)
 
-# --- FOR DEBUGGING ONLY: Hardcoded Secrets ---
-# The os.environ.get calls have been replaced with the actual token strings.
-BOX_ACCESS_TOKEN = "2UTltLFEr78kPywOtou7JSH3moZO3KgT"  # <-- Make sure this is a FRESH token
-OCR_API_KEY = "K81583609788957"
-
-# --- Other constants ---
+# Load the Developer Token secret
+BOX_ACCESS_TOKEN = os.environ.get('BOX_ACCESS_TOKEN')
 BOX_API_BASE_URL = "https://api.box.com/2.0"
-MAX_FILE_SIZE_BYTES = 1024 * 1024  # 1 MB
 
 @app.route('/process-invoice', methods=['POST'])
-def process_invoice_from_box():
+def process_invoice_from_box_diagnostic():
     data = request.get_json()
     if not data or 'filename' not in data or 'parent_folder_id' not in data:
         return jsonify({"error": "Both 'filename' and 'parent_folder_id' are required."}), 400
@@ -25,13 +21,13 @@ def process_invoice_from_box():
     parent_folder_id = data['parent_folder_id']
 
     try:
-        # Use the hardcoded Developer Token in the Authorization header
+        # Prepare headers for Box API calls
         headers = {"Authorization": f"Bearer {BOX_ACCESS_TOKEN}"}
-
-        # 1. List items in the parent folder
+        
+        # --- STEP 1: Find the file in Box ---
         list_response = requests.get(f"{BOX_API_BASE_URL}/folders/{parent_folder_id}/items", headers=headers)
         if list_response.status_code == 401:
-            return jsonify({"error": "Box API Authentication Failed (401). The hardcoded BOX_ACCESS_TOKEN is invalid or expired."}), 500
+            return jsonify({"error": "Box API returned 401 Unauthorized while listing folder contents. The BOX_ACCESS_TOKEN is invalid or expired."}), 500
         list_response.raise_for_status()
         
         items = list_response.json()['entries']
@@ -44,41 +40,45 @@ def process_invoice_from_box():
         if file_id is None:
             return jsonify({"error": f"File '{filename}' not found in folder ID '{parent_folder_id}'."}), 404
 
-        # 2. Download the file content
+        # --- STEP 2: Download the file content from Box ---
         download_response = requests.get(f"{BOX_API_BASE_URL}/files/{file_id}/content", headers=headers)
+        if download_response.status_code == 401:
+            return jsonify({"error": "Box API returned 401 Unauthorized while downloading the file. The BOX_ACCESS_TOKEN is invalid or expired."}), 500
         download_response.raise_for_status()
         
         image_content = download_response.content
-
-        # 3. Resize if needed
-        if len(image_content) > MAX_FILE_SIZE_BYTES:
-            img = Image.open(io.BytesIO(image_content))
-            scale_factor = (MAX_FILE_SIZE_BYTES / len(image_content)) ** 0.5
-            new_width = int(img.width * scale_factor)
-            new_height = int(img.height * scale_factor)
-            img = img.resize((new_width, new_height), Image.LANCZOS)
-            buffer = io.BytesIO()
-            img.save(buffer, format='PNG')
-            image_content = buffer.getvalue()
-
-        # 4. Pass to OCR
-        ocr_payload = {"apikey": OCR_API_KEY}
-        ocr_files = {"file": (filename, image_content)}
-        ocr_response = requests.post("https://api.ocr.space/parse/image", data=ocr_payload, files=ocr_files)
-        ocr_response.raise_for_status()
-
-        ocr_result = ocr_response.json()
-        if ocr_result.get('IsErroredOnProcessing'):
-            return jsonify({"error": "OCR processing failed.", "details": ocr_result.get('ErrorMessage')}), 500
-            
-        extracted_text = ocr_result['ParsedResults'][0]['ParsedText']
-
-        # 5. Return final text
-        return jsonify({"extracted_text": extracted_text})
+        
+        # --- STEP 3: Return a success message instead of calling OCR ---
+        file_size = len(image_content)
+        return jsonify({
+            "status": "DIAGNOSTIC_SUCCESS",
+            "message": "Successfully downloaded file from Box.",
+            "file_size_bytes": file_size
+        })
 
     except Exception as e:
-        return jsonify({"error": "An internal server error occurred.", "details": str(e)}), 500
+        # This will catch any other errors
+        return jsonify({"error": "An internal server error occurred during the Box API interaction.", "details": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)```
+
+#### Step 2: Push, Redeploy, and Rerun the Test
+
+1.  **Push the Change:** Commit and push this new `main.py` file to your GitHub repository. (You do not need to change your `requirements.txt` or `Dockerfile` for this test).
+2.  **Redeploy:** Go to your Render dashboard and trigger a **"Manual Deploy" -> "Deploy latest commit"**. Wait for the service to go "Live".
+3.  **Run the Prompt:** Go back to Watsonx and run your prompt:
+    > **extract details for Hatvet_invoice-min.png**
+
+#### Step 3: Analyze the Result
+
+There are only two possible outcomes now:
+
+*   **Outcome A (Most Likely):** You see the **exact same `401 Unauthorized` error.** If this happens, it is **100% definitive proof** that the problem is with the `BOX_ACCESS_TOKEN` and its state on the Render service, because the code never attempted to contact OCR.space. The only solution in this case is the "hard reset" token refresh I outlined previously.
+
+*   **Outcome B (Less Likely):** The agent responds with a success message like:
+    > `{"status": "DIAGNOSTIC_SUCCESS", "message": "Successfully downloaded file from Box.", "file_size_bytes": 618152}`
+    If you see this, it means your suspicion was correct! The Box authentication is working, and the problem was indeed in the handoff to OCR.space (likely an invalid `OCR_API_KEY`).
+
+This test will give us our final, undeniable answer and tell us exactly which credential we need to focus on.
