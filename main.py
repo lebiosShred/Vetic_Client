@@ -3,7 +3,7 @@ import requests
 from flask import Flask, request, jsonify
 from PIL import Image
 import io
-
+import json
 # Import the Box SDK components
 from boxsdk import JWTAuth, Client
 
@@ -11,18 +11,21 @@ from boxsdk import JWTAuth, Client
 app = Flask(__name__)
 
 # --- JWT Configuration ---
-# This block reads the entire JSON configuration from a single, multi-line
-# environment variable named 'BOX_JWT_CONFIG' that you set in Render.
+# Read the JSON configuration from the environment variable
 JWT_CONFIG_JSON = os.environ.get('BOX_JWT_CONFIG')
 
 # Check if the secret is present
 if not JWT_CONFIG_JSON:
-    # This will cause a clean error during startup if the secret is missing.
     raise ValueError("CRITICAL ERROR: The BOX_JWT_CONFIG environment variable is not set.")
 
-# Create an in-memory file-like object for the SDK to read the config from
-config_file = io.StringIO(JWT_CONFIG_JSON)
-auth = JWTAuth.from_settings_file(config_file)
+# Parse the JSON string into a Python dictionary
+try:
+    config_dict = json.loads(JWT_CONFIG_JSON)
+except json.JSONDecodeError as e:
+    raise ValueError(f"CRITICAL ERROR: BOX_JWT_CONFIG is not valid JSON: {e}")
+
+# Use from_settings_dictionary instead of from_settings_file
+auth = JWTAuth.from_settings_dictionary(config_dict)
 client = Client(auth)
 
 # --- Other Secrets and Constants ---
@@ -35,8 +38,8 @@ def list_folder_items():
     data = request.get_json()
     if not data or 'folder_id' not in data:
         return jsonify({"error": "folder_id is required."}), 400
+    
     folder_id = data['folder_id']
-
     try:
         # Use the SDK to get items from the folder
         items = client.folder(folder_id=folder_id).get_items()
@@ -52,12 +55,12 @@ def process_file_by_id():
     data = request.get_json()
     if not data or 'file_id' not in data:
         return jsonify({"error": "file_id is required."}), 400
+    
     file_id = data['file_id']
-
     try:
         # 1. Download file content using the SDK
         image_content = client.file(file_id).content()
-
+        
         # 2. Resize image if it's too large for the OCR service's free tier
         if len(image_content) > MAX_FILE_SIZE_BYTES:
             img = Image.open(io.BytesIO(image_content))
@@ -69,14 +72,14 @@ def process_file_by_id():
             buffer = io.BytesIO()
             img.save(buffer, format='PNG')
             image_content = buffer.getvalue()
-
+        
         # 3. Send the content to the OCR service
         ocr_payload = {"apikey": OCR_API_KEY}
         ocr_files = {"file": (f"{file_id}.png", image_content)}
         ocr_response = requests.post("https://api.ocr.space/parse/image", data=ocr_payload, files=ocr_files)
         ocr_response.raise_for_status()
         ocr_result = ocr_response.json()
-
+        
         if ocr_result.get('IsErroredOnProcessing'):
             return jsonify({"error": "OCR processing failed.", "details": ocr_result.get('ErrorMessage')}), 500
         
