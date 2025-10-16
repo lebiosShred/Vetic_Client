@@ -2,3 +2,6 @@ Flask
 Pillow
 gunicorn
 requests
+opencv-python-headless
+easyocr
+torch
