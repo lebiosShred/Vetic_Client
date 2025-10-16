@@ -1,4 +1,4 @@
 Flask
-requests
 Pillow
 gunicorn
+boxsdk[jwt]
