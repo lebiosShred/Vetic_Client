@@ -1,7 +1,4 @@
-Flask
-Pillow
-gunicorn
+Flask 
+Pillow 
+gunicorn 
 requests
-opencv-python-headless
-easyocr
-torch
